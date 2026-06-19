@@ -1,6 +1,10 @@
+from typing import BinaryIO 
 import os
-from typing import BinaryIO
-
+from cs336_basics.tokenizer.constants import SPECIAL_TOK, NUM_CHUNKS, PAT
+from models import BPEOutput
+from multiprocessing import Pool
+import regex as re
+from functools import partial
 
 def find_chunk_boundaries(
     file: BinaryIO,
@@ -49,15 +53,49 @@ def find_chunk_boundaries(
     return sorted(set(chunk_boundaries))
 
 
-## Usage
-with open(..., "rb") as f:
-    num_processes = 4
-    boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
-    # The following is a serial implementation, but you can parallelize this
-    # by sending each start/end pair to a set of processes.
-    for start, end in zip(boundaries[:-1], boundaries[1:]):
-        f.seek(start)
+def pretokenize(start: int, end:int,fp:str,) -> dict[tuple[bytes,...], int]:
+
+    pt = []
+    with open(fp, "rb") as f:
+        f.seek(start) 
         chunk = f.read(end - start).decode("utf-8", errors="ignore")
-        # Run pre-tokenization on your chunk and store the counts for each pre-token
-        
+        chunks = chunk.split(str(SPECIAL_TOK.decode('utf-8')))
+        for chunk in chunks:
+            for m in re.finditer(PAT, chunk):
+                pt.append(m.group())
+
+    freq: dict[str, int] = {}
+
+    # for cand in pt:
+    for word in pt:
+        freq[word] = freq.get(word, 0) + 1
+
+    return format_tokens(freq)
+
+def chunk(file:str, num_chunks: int = NUM_CHUNKS, special_tok: bytes = SPECIAL_TOK) -> list[dict[tuple[bytes, ...], int]]:
+    with open(file, "rb") as f:
+        boundaries = find_chunk_boundaries(f, num_chunks, special_tok)
+
+        chunk_steps:list[tuple[int,int]] = []
+        for start, end in zip(boundaries[:-1], boundaries[1:]):
+            chunk_steps.append((start, end)) 
+         
+
+    with Pool() as pool:
+        fn = partial(pretokenize, fp=file)
+        results = pool.starmap(fn, chunk_steps)
+
+    return results
+
+
+def format_tokens(toks:dict[str, int]) -> dict[tuple[bytes, ...], int]:
+    formatted_toks: dict[tuple[bytes, ...], int] = {}
+
+    for k, v in toks.items():
+        encoded_k = k.encode("utf-8")
+        key = [tuple([encoded_k[i:i+1] for i in range(len(encoded_k))]) ]
+        formatted_toks[key[0]] = v
+
+    return formatted_toks
+
