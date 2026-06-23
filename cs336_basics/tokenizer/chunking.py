@@ -1,7 +1,7 @@
 from typing import BinaryIO 
 import os
 from cs336_basics.tokenizer.constants import SPECIAL_TOK, NUM_CHUNKS, PAT
-from models import BPEOutput
+# from cs336_basics.tokenizer.models import BPEOutput
 from multiprocessing import Pool
 import regex as re
 from functools import partial
