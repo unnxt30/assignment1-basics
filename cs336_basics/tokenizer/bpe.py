@@ -53,9 +53,7 @@ def merge(chunks:list[dict[tuple[bytes,...], int]],from_val:tuple[bytes, ...],me
     for ind in indices:
         target = chunks[ind]
         new_cand: list[bytes]= []
-        curr:list[bytes] = []
         count = 0
-        update_index = 0
         for cand, v in target.items():
             curr = list(cand)
             count = v
@@ -68,36 +66,7 @@ def merge(chunks:list[dict[tuple[bytes,...], int]],from_val:tuple[bytes, ...],me
 
                 if val == from_val: #pyright:ignore
                     new_cand.append(to_val)
-                    p = i
-                    q = len(new_cand) - 1 
-
-                    if p > 0:
-                        left = (cand[p - 1], cand[p])
-                        pairs_to_update[left] = pairs_to_update.get(left, 0) + count
-
-                    pairs_to_update[from_val] = pairs_to_update.get(from_val, 0) + count
-
-                    if p + 2 < len(cand):
-                        right = (cand[p + 1], cand[p + 2])
-                        pairs_to_update[right] = pairs_to_update.get(right, 0) + count
-
-                    if q > 0:
-                        a = (new_cand[q - 1], to_val)
-                        prev = pairs_to_add.get(a)
-                        if prev:
-                            prev.count += count
-                            prev.indexes.add(ind)
-                        else:
-                            pairs_to_add[a] = MergePair(count=count, indexes={ind})
-
-                    if p + 2 < len(cand):
-                        a = (to_val, cand[p + 2])
-                        prev = pairs_to_add.get(a)
-                        if prev:
-                            prev.count += count
-                            prev.indexes.add(ind)
-                        else:
-                            pairs_to_add[a] = MergePair(count=count, indexes={ind})
+                    
                     i += 2
                 else:
                     new_cand.append(cand[i])
@@ -105,6 +74,38 @@ def merge(chunks:list[dict[tuple[bytes,...], int]],from_val:tuple[bytes, ...],me
 
             chunks[ind] = {tuple(new_cand): v}
 
+            # new approach, iterate through the original cand and see what exist in the new_cand. 
+            # if they do, then they won't be present in pairs_to_update, else they will.
+            # form bigrams of new_cand and old_cand
+            new_bigrams:dict[tuple[bytes, bytes], int] = {}
+            old_bigrams: dict[tuple[bytes, bytes], int] = {}
+
+            for i in range(len(cand) - 1):
+                old_bigrams[(cand[i], cand[i+1])] = old_bigrams.get((cand[i], cand[i+1]), 0) + 1
+            for i in range(len(new_cand) - 1):
+                new_bigrams[(new_cand[i], new_cand[i+1])] = new_bigrams.get((new_cand[i], new_cand[i+1]), 0) + 1
+
+            for item,v in old_bigrams.items():
+                if item in new_bigrams: 
+                    new_cnt = new_bigrams[item]
+                    delta = v - new_cnt
+                    if delta == 0:
+                        continue
+                    else:
+                        pairs_to_update[item] = delta * count + pairs_to_update.get(item, 0)
+                else:
+                    pairs_to_update[item] = v * count + pairs_to_update.get(item, 0)
+
+            for item, v in new_bigrams.items():
+                if item not in old_bigrams:
+                    old = pairs_to_add.get(item, None)
+                    if old :
+                        pairs_to_add[item].count = old.count + v * count
+                        old.indexes.add(ind)
+                        pairs_to_add[item].indexes = old.indexes
+                    else:
+                        pairs_to_add[item] = MergePair(count=v*count, indexes=set([ind]))
+                
     return pairs_to_add, pairs_to_update
 
 
@@ -125,7 +126,6 @@ def train_bpe(input_path:str, vocab_size:int, special_tokens:list[str]):
 
     for ind, chnk in enumerate(chunks):
         for k, v in chnk.items():
-            i = 0
             for l in range(len(k)-1):
                 val = (k[l], k[l+1])
                 prev = merge_rank_table.get(val, None)
@@ -135,7 +135,8 @@ def train_bpe(input_path:str, vocab_size:int, special_tokens:list[str]):
                 else:
                     merge_rank_table[val] = MergePair(count=v, indexes=set([ind]))
 
-    for _ in range(num_merges):
+    for i in range(num_merges):
+
         top_pair = get_top_merge_candidate(merge_rank_table)
         merge_table.append(top_pair[0]) #pyright:ignore
 
@@ -173,8 +174,14 @@ def train_bpe(input_path:str, vocab_size:int, special_tokens:list[str]):
 
 
 
-if __name__=="__main__":
-
+# if __name__=="__main__":
+#     from tests.common import FIXTURES_PATH, gpt2_bytes_to_unicode
+#     input_path = FIXTURES_PATH / "tinystories_sample_5M.txt"
+#     out =  train_bpe(
+#         input_path=str(input_path),
+#         vocab_size=1000,
+#         special_tokens=["<|endoftext|>"],
+#     )
 
 #     t1 = {
 #     (b"a", b"b"): MergePair(count=5, indexes={0}),
@@ -202,53 +209,65 @@ if __name__=="__main__":
 #     print(get_top_merge_candidate(t3))
 
 
-    # A — merge in the middle 
-    chunks_a = [{(b"l", b"o", b"w"): 5}] 
-    print(merge(chunks_a, (b"l", b"o"), MergePair(count=5, indexes={0}))) 
-    assert chunks_a            == [{(b"lo", b"w"): 5}] 
-    # B — merge at the end (no right neighbor) 
-    chunks_b = [{(b"l", b"o", b"w"): 5}] 
-    print(merge(chunks_b, (b"o", b"w"), MergePair(count=5, indexes={0}))) 
-    assert chunks_b ==   [{(b"l", b"ow"): 5}] 
-    # C — both neighbors present (start + end branches both fire) 
-    chunks_c = [{(b"f", b"l", b"o", b"w"): 5}]
-    print(merge(chunks_c, (b"l", b"o"), MergePair(count=5, indexes={0})))
-    assert chunks_c == [{(b"f", b"lo", b"w"): 5}]
+#     # A — merge in the middle 
+#     chunks_a = [{(b"l", b"o", b"w"): 5}] 
+#     print(merge(chunks_a, (b"l", b"o"), MergePair(count=5, indexes={0}))) 
+#     assert chunks_a            == [{(b"lo", b"w"): 5}] 
+#     # B — merge at the end (no right neighbor) 
+#     chunks_b = [{(b"l", b"o", b"w"): 5}] 
+#     print(merge(chunks_b, (b"o", b"w"), MergePair(count=5, indexes={0}))) 
+#     assert chunks_b ==   [{(b"l", b"ow"): 5}] 
+#     # C — both neighbors present (start + end branches both fire) 
+#     chunks_c = [{(b"f", b"l", b"o", b"w"): 5}]
+#     print(merge(chunks_c, (b"l", b"o"), MergePair(count=5, indexes={0})))
+#     assert chunks_c == [{(b"f", b"lo", b"w"): 5}]
 
-    # # D — overlapping pair (the trap): greedy left-to-right => ONE merge
-    chunks_d = [{(b"a", b"a", b"a"): 1}]
-    print(merge(chunks_d, (b"a", b"a"), MergePair(count=1, indexes={0})))
-    assert chunks_d == [{(b"aa", b"a"): 1}]
+#     # # D — overlapping pair (the trap): greedy left-to-right => ONE merge
+#     chunks_d = [{(b"a", b"a", b"a"): 1}]
+#     print(merge(chunks_d, (b"a", b"a"), MergePair(count=1, indexes={0})))
+#     assert chunks_d == [{(b"aa", b"a"): 1}]
 
-    # E — two non-overlapping occurrences in one word
-    chunks_e = [{(b"a", b"b", b"a", b"b"): 1}]
-    print(merge(chunks_e, (b"a", b"b"), MergePair(count=1, indexes={0})))
-    assert chunks_e == [{(b"ab", b"ab"): 1}]
+    # # E — two non-overlapping occurrences in one word
+    # chunks_e = [{(b"a", b"b", b"a", b"a",b"b", b"a"): 1}]
+    # add, update = merge(chunks_e, (b"a", b"b"), MergePair(count=1, indexes={0}))
+    # print(add)
+    # # print(update)
+    # assert chunks_e == [{(b"ab", b"a",b"ab", b"a"): 1}]
 
-    # F — multiple chunks; chunk 1 also contains the pair but is NOT listed
-    chunks_f = [{(b"l", b"o", b"w"): 5}, {(b"l", b"o", b"g"): 2}, {(b"l", b"o", b"w"): 3}]
-    print(merge(chunks_f, (b"l", b"o"), MergePair(count=8, indexes={0, 2})))
-    assert chunks_f == [{(b"lo", b"w"): 5}, {(b"l", b"o", b"g"): 2}, {(b"lo", b"w"): 3}]
+#     # F — multiple chunks; chunk 1 also contains the pair but is NOT listed
+#     chunks_f = [{(b"l", b"o", b"w"): 5}, {(b"l", b"o", b"g"): 2}, {(b"l", b"o", b"w"): 3}]
+#     print(merge(chunks_f, (b"l", b"o"), MergePair(count=8, indexes={0, 2})))
+#     assert chunks_f == [{(b"lo", b"w"): 5}, {(b"l", b"o", b"g"): 2}, {(b"lo", b"w"): 3}]
 
-    # G — pair absent in a listed chunk
-    chunks_g = [{(b"c", b"a", b"t"): 4}]
-    print(merge(chunks_g, (b"l", b"o"), MergePair(count=0, indexes={0})))
-    assert chunks_g == [{(b"c", b"a", b"t"): 4}]
+#     # G — pair absent in a listed chunk
+#     chunks_g = [{(b"c", b"a", b"t"): 4}]
+#     print(merge(chunks_g, (b"l", b"o"), MergePair(count=0, indexes={0})))
+#     assert chunks_g == [{(b"c", b"a", b"t"): 4}]
 
-    # H — longer overlap run
-    chunks_h = [{(b"a", b"a", b"a", b"a"): 1}]
-    print(merge(chunks_h, (b"a", b"a"), MergePair(count=1, indexes={0})))
-    assert chunks_h == [{(b"aa", b"aa"): 1}]
+#     # H — longer overlap run
+#     chunks_h = [{(b"a", b"a", b"a", b"a"): 1}]
+#     print(merge(chunks_h, (b"a", b"a"), MergePair(count=1, indexes={0})))
+#     assert chunks_h == [{(b"aa", b"aa"): 1}]
 
-    # I — odd-length overlap run
-    chunks_i = [{(b"a", b"a", b"a", b"a", b"a"): 1}]
-    print(merge(chunks_i, (b"a", b"a"), MergePair(count=1, indexes={0})))
-    assert chunks_i == [{(b"aa", b"aa", b"a"): 1}]
+#     # I — odd-length overlap run
+#     chunks_i = [{(b"a", b"a", b"a", b"a", b"a"): 1}]
+#     print(merge(chunks_i, (b"a", b"a"), MergePair(count=1, indexes={0})))
+#     assert chunks_i == [{(b"aa", b"aa", b"a"): 1}]
 
-    # J — same neighbor pair occurs twice (probes the RETURN, not chunks)
-    chunks_j = [{(b"x", b"a", b"b", b"x", b"a", b"b"): 1}]
-    print(merge(chunks_j, (b"a", b"b"), MergePair(count=1, indexes={0})))
-    assert chunks_j == [{(b"x", b"ab", b"x", b"ab"): 1}]
+#     # J — same neighbor pair occurs twice (probes the RETURN, not chunks)
+#     chunks_j = [{(b"x", b"a", b"b", b"x", b"a", b"b"): 1}]
+#     print(merge(chunks_j, (b"a", b"b"), MergePair(count=1, indexes={0})))
+#     assert chunks_j == [{(b"x", b"ab", b"x", b"ab"): 1}]
+
+#     # K — partial survival: (b,c) appears twice, only one copy is destroyed
+#     chunks_k = [{(b"a", b"b", b"c", b"d", b"b", b"c"): 1}]
+#     add, update = merge(chunks_k, (b"a", b"b"), MergePair(count=1, indexes={0}))
+#     assert chunks_k == [{(b"ab", b"c", b"d", b"b", b"c"): 1}]          # rewrite
+#     print(update)
+#     assert update == {(b"a", b"b"): 1, (b"b", b"c"): 1}               # <-- the discriminator
+#     assert set(add) == {(b"ab", b"c")}                                # only the new pair
+#     assert add[(b"ab", b"c")].count == 1
+#     assert add[(b"ab", b"c")].indexes == {0}
 
 
     # chunks_sample = [{(b"l", b"o", b"w"): 5}, {(b"l", b"o", b"w", b"e", b"r"): 2}, {(b"w", b"i", b"d", b"e", b"s", b"t"): 3}, {(b"n", b"e", b"w", b"e", b"s", b"t"):6}]
