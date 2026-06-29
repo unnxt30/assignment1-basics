@@ -273,3 +273,17 @@ def test_push_update_drain_reconciles(seed):
 
     expected = sorted((node(p, c) for p, c in counts.items()), reverse=True)
     assert as_keys(drain(h)) == as_keys(expected)
+
+
+def test_push_counts():
+    node_1 = HeapNode(pair=(b'a', b'b'), count=3)
+    node_2 = HeapNode(pair=(b'a', b'b'), count=99)
+    
+    hp = IndexedHeap()
+    hp.push(node_1)
+    assert len(hp.heap) == 1
+    assert hp.index[node_1.pair] == 0
+
+    hp.push(node_2)
+
+    print(hp.heap[hp.index[node_2.pair]].count)

@@ -30,16 +30,22 @@ class IndexedHeap:
         self.index: dict[tuple[bytes, bytes], int] = {}
 
     def push(self, node: HeapNode):
-        self.heap.append(node)
-        self.index[node.pair] = len(self.heap) - 1
-        self.sift_up(len(self.heap)-1)
+        ind = self.index.get(node.pair, -1)
+        if ind == -1:
+            self.heap.append(node)
+            self.index[node.pair] = len(self.heap) - 1
+            self.sift_up(len(self.heap)-1)
+        else:
+            self.update(node, node.count)
         return
 
 
     def delete(self, node:HeapNode):
         if len(self.heap) < 1:
             return 
-        ind = self.index[node.pair]
+        ind = self.index.get(node.pair, -1)
+        if ind == -1:
+            return
         last = len(self.heap) - 1
         self.swap(ind, len(self.heap) - 1)
         del self.index[node.pair]
@@ -58,11 +64,15 @@ class IndexedHeap:
 
 
     def pop_max(self):
+        if len(self.heap) == 0:
+            return None
         return self.heap[0]
 
 
     def update(self, node: HeapNode, delta: int):
         curr_ind = self.index.get(node.pair, -1)
+        if curr_ind < 0:
+            return
         curr_count = self.heap[curr_ind].count
         self.heap[curr_ind] = HeapNode(pair=node.pair, count=curr_count + delta)
         parent = self._parent(curr_ind) 
@@ -94,9 +104,12 @@ class IndexedHeap:
             self.swap(ind, parent)
             ind = parent
             parent = self._parent(parent)
-
+            if parent == -1:
+               break 
             par = self.heap[parent]
             curr = self.heap[ind]
+        
+        return
 
 
     def sift_down(self, ind:int):
